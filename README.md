@@ -1,6 +1,6 @@
 # CNBV Web Scraping & Monitoreo de Rechazos
 
-Este proyecto es un bot automatizado de Web Scraping desarrollado en **Python** que monitorea, extrae y gestiona el registro de **Rechazos** de oficios del portal de la **CNBV (Comisión Nacional Bancaria y de Valores)**. Los datos se procesan, se guardan de forma incremental en **Google Sheets** y se envían notificaciones en tiempo real a diferentes salas de **Google Chat** según el área de procedencia.
+Este proyecto es un bot automatizado de Web Scraping desarrollado en **Python** que monitorea, extrae y gestiona el registro de **Rechazos** de oficios del portal de la **CNBV (Comisión Nacional Bancaria y de Valores)**. Los datos se procesan, se guardan de forma incremental en **Google Sheets** y se envían notificaciones en tiempo real a diferentes salas de **Google Chat** según el área de procedencia, además de un resumen consolidado a **Telegram**.
 
 ---
 
@@ -14,6 +14,7 @@ Este proyecto es un bot automatizado de Web Scraping desarrollado en **Python** 
     *   `Operaciones Ilícitas`
 *   **Base de Datos en Google Sheets**: Guarda los registros de manera inteligente (evitando duplicados utilizando un ID compuesto de `Folio-Fecha de rechazo`).
 *   **Notificaciones Dinámicas (Google Chat)**: Envía tarjetas visuales e interactivas directamente a los webhooks correspondientes de cada equipo en Google Chat.
+*   **Resumen en Telegram**: Envía el total de registros nuevos, los oficios agrupados por área y un botón para abrir la hoja de monitoreo. Los resúmenes largos se dividen en varios mensajes.
 *   **Contenerización con Docker & Tini**: Preparado para producción usando una imagen base optimizada de Playwright y `tini` como init process para evitar procesos zombis.
 
 ---
@@ -39,6 +40,10 @@ CHAT_WEBHOOK_DATA=https://chat.googleapis.com/v1/spaces/...
 CHAT_WEBHOOK_ESP=https://chat.googleapis.com/v1/spaces/...
 CHAT_WEBHOOK_HAC=https://chat.googleapis.com/v1/spaces/...
 CHAT_WEBHOOK_ASEG=https://chat.googleapis.com/v1/spaces/...
+
+# --- Bot de Telegram ---
+TELEGRAM_TOKEN=token_de_tu_bot
+TELEGRAM_CHAT_ID=id_del_chat_destino
 
 # --- Credenciales GCP Service Account ---
 GCP_TYPE=service_account
@@ -102,3 +107,13 @@ GCP_UNIVERSE_DOMAIN=googleapis.com
     *   Se limpia y se actualiza la pestaña `Novedades` con los registros recién ingresados.
 5.  **Notificaciones**:
     *   Agrupa las alertas por Área y envía una tarjeta informativa personalizada a Google Chat con enlace directo a la hoja de monitoreo.
+    *   Envía a Telegram un resumen consolidado de todas las áreas, incluyendo `Judicial`, con formato HTML y el mismo enlace de monitoreo. Solo se notifica cuando se guardan registros nuevos.
+    *   Telegram utiliza `TELEGRAM_TOKEN` y `TELEGRAM_CHAT_ID`, independientemente de los webhooks de Google Chat. Si falta alguna variable, se omite el envío; los errores de Telegram se registran sin detener el envío a Google Chat.
+
+## Pruebas
+
+Las pruebas simulan las solicitudes HTTP y la conexión a Google Sheets; no envían notificaciones reales ni cargan el archivo `.env`.
+
+```bash
+python3 -m unittest discover -s tests -v
+```

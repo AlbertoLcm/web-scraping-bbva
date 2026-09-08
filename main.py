@@ -3,6 +3,7 @@ import pandas as pd
 from datetime import datetime
 from playwright.async_api import async_playwright
 from io import StringIO
+from html import escape
 import gspread
 from oauth2client.service_account import ServiceAccountCredentials
 from gspread_dataframe import set_with_dataframe
@@ -25,6 +26,8 @@ CONFIG = {
     "CHAT_WEBHOOK_ESP": os.getenv("CHAT_WEBHOOK_ESP"),
     "CHAT_WEBHOOK_HAC": os.getenv("CHAT_WEBHOOK_HAC"),
     "CHAT_WEBHOOK_ASEG": os.getenv("CHAT_WEBHOOK_ASEG"),
+    "TELEGRAM_TOKEN": os.getenv("TELEGRAM_TOKEN"),
+    "TELEGRAM_CHAT_ID": os.getenv("TELEGRAM_CHAT_ID"),
 }
 
 URLS = {
@@ -63,6 +66,89 @@ def get_gspread_client():
 gc = get_gspread_client()
 
 # ================= NOTIFICACIONES =================
+
+def crear_mensajes_telegram(df_nuevos):
+    """Resume los oficios por área y divide el texto sin romper el formato HTML."""
+    if df_nuevos.empty:
+        return []
+
+    cantidad = len(df_nuevos)
+    plural = "s" if cantidad != 1 else ""
+    lineas = [
+        ("🚨 ¡Nuevos Rechazos!", True),
+        ("Origen: CNBV", False),
+        (f"Se han guardado {cantidad} oficio{plural} nuevo{plural}:", False),
+    ]
+    for area, df_area in df_nuevos.groupby('Area', dropna=False):
+        lineas.append((f"\n{area} ({len(df_area)}):", True))
+        for oficio in df_area['Oficio CNBV']:
+            lineas.append((f"• {oficio}", True))
+
+    mensajes = []
+    mensaje = []
+    longitud = 0
+    for texto, negrita in lineas:
+        # Se divide antes de escapar HTML para conservar entidades y etiquetas.
+        # 2000 caracteres ocupan como máximo 4000 unidades UTF-16.
+        for inicio in range(0, len(texto), 2000):
+            fragmento = texto[inicio:inicio + 2000]
+            tamano = len(fragmento.encode('utf-16-le')) // 2
+            separador = 1 if mensaje else 0
+            if longitud + separador + tamano > 4096:
+                mensajes.append("\n".join(mensaje))
+                mensaje = []
+                longitud = 0
+                separador = 0
+            contenido = escape(fragmento, quote=False)
+            mensaje.append(f"<b>{contenido}</b>" if negrita else contenido)
+            longitud += separador + tamano
+    if mensaje:
+        mensajes.append("\n".join(mensaje))
+    return mensajes
+
+
+def enviar_alerta_telegram(df_nuevos):
+    """Envía el resumen de registros nuevos al chat configurado en Telegram."""
+    if df_nuevos.empty:
+        return
+
+    token = CONFIG.get("TELEGRAM_TOKEN")
+    chat_id = CONFIG.get("TELEGRAM_CHAT_ID")
+    if not token or not chat_id:
+        print("[WARN] Falta TELEGRAM_TOKEN o TELEGRAM_CHAT_ID. No se enviará mensaje a Telegram.")
+        return
+
+    url = f"https://api.telegram.org/bot{token}/sendMessage"
+    for texto in crear_mensajes_telegram(df_nuevos):
+        payload = {
+            "chat_id": chat_id,
+            "text": texto,
+            "parse_mode": "HTML",
+            "reply_markup": {
+                "inline_keyboard": [[{
+                    "text": "Abrir Hoja de Monitoreo",
+                    "url": URLS['SHEET_MONITOREO'],
+                }]],
+            },
+        }
+        try:
+            response = requests.post(url, json=payload, timeout=15)
+            if response.status_code != 200:
+                print(f"[ERROR TELEGRAM] Fallo al enviar resumen. HTTP: {response.status_code}")
+                return
+            resultado = response.json()
+            if not isinstance(resultado, dict) or resultado.get("ok") is not True:
+                print("[ERROR TELEGRAM] La API no confirmó el envío del resumen.")
+                return
+            print("[TELEGRAM] Mensaje de resumen enviado exitosamente.")
+        except requests.RequestException as e:
+            # Las excepciones de requests pueden incluir la URL con el token.
+            print(f"[ERROR TELEGRAM] Fallo de conexión al enviar resumen: {type(e).__name__}")
+            return
+        except ValueError:
+            print("[ERROR TELEGRAM] La API devolvió una respuesta JSON inválida.")
+            return
+
 
 def enviar_alerta_chat(df_nuevos):
     """
@@ -189,6 +275,7 @@ def procesar_datos(df_nuevo):
             
             notificar_novedades(nuevos_reales)
 
+            enviar_alerta_telegram(nuevos_reales)
             enviar_alerta_chat(nuevos_reales)
         else:
             print("[INFO] zzz Los datos escaneados ya existen en la base.")
