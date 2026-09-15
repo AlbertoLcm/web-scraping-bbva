@@ -30,6 +30,8 @@ CNBV_PASS=tu_contraseña_cnbv
 URL_LOGIN=URL_LOGIN
 URL_CONSULTA=URL_CONSULTA
 URL_FUERA_SERVICIO=URL_FUERA_SERVICIO
+URL_PUBLICADOS=URL_PUBLICADOS
+URL_ENVIO_RESPUESTAS=URL_ENVIO_RESPUESTAS
 
 # --- Hojas de Google Sheets ---
 SHEET_ID=id_de_la_hoja_de_calculo_principal
@@ -41,9 +43,9 @@ CHAT_WEBHOOK_ESP=https://chat.googleapis.com/v1/spaces/...
 CHAT_WEBHOOK_HAC=https://chat.googleapis.com/v1/spaces/...
 CHAT_WEBHOOK_ASEG=https://chat.googleapis.com/v1/spaces/...
 
-# --- Bot de Telegram ---
-TELEGRAM_TOKEN=token_de_tu_bot
-TELEGRAM_CHAT_ID=id_del_chat_destino
+# --- Telegram (resumen de rechazos nuevos) ---
+TELEGRAM_TOKEN=token_del_bot
+TELEGRAM_CHAT_ID=id_del_chat
 
 # --- Credenciales GCP Service Account ---
 GCP_TYPE=service_account
@@ -87,8 +89,44 @@ GCP_UNIVERSE_DOMAIN=googleapis.com
 
 5.  **Ejecutar el bot**:
     ```bash
-    python main.py
+    python main.py --task rechazos
     ```
+
+    Las otras tareas disponibles son:
+    ```bash
+    python main.py --task historico_diario
+    python main.py --task pendientes
+    ```
+
+    `rechazos` guarda registros nuevos en Sheets y envía alertas. `historico_diario`
+    consulta los publicados del día actual en CDMX; `pendientes` consulta los escritos
+    de respuesta y rechazos pendientes. Estas dos tareas devuelven un DataFrame y
+    muestran el total extraído; no tienen persistencia ni notificaciones configuradas.
+    Todas las tareas usan Chromium en modo headless y omiten fines de semana en CDMX.
+
+## Estructura del código
+
+| Archivo | Responsabilidad |
+| --- | --- |
+| `main.py` | Selección de tarea mediante `--task` y validación del día de ejecución. |
+| `app/config.py` | Carga de `.env`, credenciales, URLs, áreas y clasificación de oficios. |
+| `app/database.py` | Conexión diferida a Sheets, deduplicación y actualización de Resultados/Novedades. |
+| `app/notifier.py` | Tarjetas de Google Chat y resumen por Telegram. |
+| `app/scraper/cnbv_client.py` | Inicio de sesión y cierre garantizado del navegador. |
+| `app/scraper/task_rechazos.py` | Extracción y coordinación del guardado y las alertas de rechazos. |
+| `app/scraper/task_historico.py` | Extracción de publicados y clasificación por expediente. |
+| `app/scraper/task_pendientes.py` | Extracción de pendientes por área y tipo de respuesta. |
+
+`app/main copy.py` delega al punto de entrada principal y acepta los mismos argumentos.
+Para consultar otro intervalo desde Python, usa
+`await ejecutar_extraccion_historica(date_start, date_end)` del módulo
+`app.scraper.task_historico`, con fechas `datetime`.
+
+Las pruebas usan servicios simulados y no envían mensajes ni modifican hojas:
+
+```bash
+python -m unittest discover -s tests -v
+```
 
 ---
 
@@ -107,13 +145,5 @@ GCP_UNIVERSE_DOMAIN=googleapis.com
     *   Se limpia y se actualiza la pestaña `Novedades` con los registros recién ingresados.
 5.  **Notificaciones**:
     *   Agrupa las alertas por Área y envía una tarjeta informativa personalizada a Google Chat con enlace directo a la hoja de monitoreo.
-    *   Envía a Telegram un resumen consolidado de todas las áreas, incluyendo `Judicial`, con formato HTML y el mismo enlace de monitoreo. Solo se notifica cuando se guardan registros nuevos.
-    *   Telegram utiliza `TELEGRAM_TOKEN` y `TELEGRAM_CHAT_ID`, independientemente de los webhooks de Google Chat. Si falta alguna variable, se omite el envío; los errores de Telegram se registran sin detener el envío a Google Chat.
-
-## Pruebas
-
-Las pruebas simulan las solicitudes HTTP y la conexión a Google Sheets; no envían notificaciones reales ni cargan el archivo `.env`.
-
-```bash
-python3 -m unittest discover -s tests -v
-```
+    *   Envía un único resumen por Telegram con el total de rechazos nuevos guardados, cantidades por área y enlace a la hoja de monitoreo mediante [sendMessage](https://core.telegram.org/bots/api#sendmessage).
+    *   Telegram usa `TELEGRAM_TOKEN` y `TELEGRAM_CHAT_ID` del `.env`. Si faltan o el envío falla, se registra el aviso y continúa el flujo de Google Chat. No se envían alertas cuando no hay registros nuevos.
