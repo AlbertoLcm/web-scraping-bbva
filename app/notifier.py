@@ -1,58 +1,14 @@
 """Notificaciones de nuevos rechazos en Google Chat y Telegram."""
 
+from html import escape
+
 import requests
 
 from app.config import CONFIG, URLS
 
 
-def enviar_alerta_pendientes_error() -> bool:
-    """Notifica al chat de datos que el reporte de pendientes falló durante su ejecución."""
-
-    webhook = CONFIG.get("CHAT_WEBHOOK_DATA")
-
-    if not webhook:
-        print(
-            "[WARN] Chat de datos sin configurar: "
-            "falta CHAT_WEBHOOK_DATA. No se enviará la alerta de error."
-        )
-        return False
-
-    mensaje = (
-        "⚠️ Reporte de pendientes | Error de ejecución\n\n"
-        "El proceso de actualización del reporte de pendientes "
-        "finalizó con un error y requiere revisión.\n\n"
-        f"<{URLS['SHEET_BASE']}|Abrir reporte de pendientes>"
-    )
-
-    try:
-        response = requests.post(
-            webhook,
-            json={"text": mensaje},
-            timeout=15,
-        )
-
-        if not response.ok:
-            print(
-                "[ERROR CHAT] Fallo al enviar la alerta de error de pendientes. "
-                f"HTTP: {response.status_code}"
-            )
-            return False
-
-    except requests.RequestException:
-        print(
-            "[ERROR CHAT] Fallo de conexión al enviar "
-            "la alerta de error de pendientes."
-        )
-        return False
-
-    print("[CHAT] Alerta de error de pendientes enviada exitosamente.")
-    return True
-
-
-def enviar_alerta_telegram(df_nuevos) -> bool:
-    """Envía un resumen del lote guardado: total, cantidades por área y enlace."""
-    if df_nuevos.empty:
-        return False
+def _enviar_mensaje_telegram(texto: str, texto_boton: str, url_boton: str) -> bool:
+    """Envía un mensaje de Telegram con formato HTML y un botón de acción."""
 
     token = CONFIG.get("TELEGRAM_TOKEN")
     chat_id = CONFIG.get("TELEGRAM_CHAT_ID")
@@ -60,33 +16,95 @@ def enviar_alerta_telegram(df_nuevos) -> bool:
         print("[WARN] Telegram sin configurar: falta TELEGRAM_TOKEN o TELEGRAM_CHAT_ID.")
         return False
 
-    cantidades = df_nuevos["Area"].fillna("Sin área").value_counts()
-    lineas = ["CNBV | Nuevos rechazos", f"Total guardados: {len(df_nuevos)}", ""]
-    lineas.extend(f"• {area}: {cantidad}" for area, cantidad in cantidades.items())
-    lineas.extend(["", f"Hoja de monitoreo: {URLS['SHEET_BASE']}"])
     try:
-
         response = requests.post(
             f"https://api.telegram.org/bot{token}/sendMessage",
             json={
                 "chat_id": chat_id,
-                "text": "\n".join(lineas),
+                "text": texto,
+                "parse_mode": "HTML",
                 "link_preview_options": {"is_disabled": True},
+                "reply_markup": {
+                    "inline_keyboard": [[{
+                        "text": texto_boton,
+                        "url": url_boton,
+                    }]],
+                },
             },
             timeout=15,
         )
         if response.status_code != 200:
-            print(f"[ERROR TELEGRAM] Fallo al enviar resumen. HTTP: {response.status_code}")
+            print(f"[ERROR TELEGRAM] Fallo al enviar mensaje. HTTP: {response.status_code}")
             return False
         if response.json().get("ok") is not True:
-            print("[ERROR TELEGRAM] La API no confirmó el envío del resumen.")
+            print("[ERROR TELEGRAM] La API no confirmó el envío del mensaje.")
             return False
     except (requests.RequestException, ValueError):
         # Las excepciones HTTP pueden incluir la URL con el token del bot.
-        print("[ERROR TELEGRAM] Fallo de conexión o respuesta inválida al enviar resumen.")
+        print("[ERROR TELEGRAM] Fallo de conexión o respuesta inválida al enviar mensaje.")
         return False
 
-    print("[TELEGRAM] Resumen enviado exitosamente.")
+    return True
+
+
+def enviar_alerta_pendientes_error() -> bool:
+    """Notifica por Telegram que el reporte de pendientes falló durante su ejecución."""
+
+    mensaje = (
+        "⚠️ <b>Reporte de pendientes con error</b>\n"
+        "━━━━━━━━━━━━━━\n"
+        "<i>Origen: CNBV</i>\n\n"
+        "<b>Se requiere revisión</b>\n"
+        "El proceso de actualización finalizó con un error.\n\n"
+        "📌 Consulta el reporte para identificar el incidente."
+    )
+
+    if not _enviar_mensaje_telegram(
+        mensaje,
+        "Abrir Hoja de Monitoreo",
+        URLS["SHEET_BASE"],
+    ):
+        return False
+
+    print("[TELEGRAM] Alerta de error de pendientes enviada exitosamente.")
+    return True
+
+
+def enviar_alerta_telegram(df_nuevos) -> bool:
+    """Envía una alerta visual por área con sus oficios y acceso al monitoreo."""
+    if df_nuevos.empty:
+        return False
+
+    datos_por_area = df_nuevos.assign(Area=df_nuevos["Area"].fillna("Sin área"))
+    for area, df_area in datos_por_area.groupby("Area", sort=False):
+        oficios = df_area.get("Oficio CNBV")
+        lineas_oficios = (
+            [f"• <b>{escape(str(oficio))}</b>" for oficio in oficios]
+            if oficios is not None
+            else ["• <i>Sin número de oficio</i>"]
+        )
+        texto_oficios = "\n".join(lineas_oficios)
+        cantidad = len(df_area)
+        plural = "s" if cantidad != 1 else ""
+        area_segura = escape(str(area))
+        mensaje = (
+            f"🚨 <b>Nuevos rechazos: {area_segura}</b>\n"
+            "━━━━━━━━━━━━━━\n"
+            "<i>Origen: CNBV</i>\n\n"
+            f"<b>Se ha{'' if cantidad == 1 else 'n'} guardado {cantidad} "
+            f"oficio{plural} nuevo{plural}</b>\n\n"
+            f"{texto_oficios}\n\n"
+            "📌 Consulta el detalle completo en la hoja de monitoreo."
+        )
+
+        if not _enviar_mensaje_telegram(
+            mensaje,
+            "Abrir Hoja de Monitoreo",
+            URLS["SHEET_MONITOREO"],
+        ):
+            return False
+
+    print("[TELEGRAM] Alertas enviadas exitosamente.")
     return True
 
 
