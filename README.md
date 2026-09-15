@@ -1,6 +1,6 @@
 # CNBV Web Scraping & Monitoreo de Rechazos
 
-Este proyecto es un bot automatizado de Web Scraping desarrollado en **Python** que monitorea, extrae y gestiona el registro de **Rechazos** de oficios del portal de la **CNBV (Comisión Nacional Bancaria y de Valores)**. Los datos se procesan, se guardan de forma incremental en **Google Sheets** y se envían notificaciones en tiempo real a diferentes salas de **Google Chat** según el área de procedencia.
+Este proyecto es un bot automatizado de Web Scraping desarrollado en **Python** que monitorea, extrae y gestiona el registro de **Rechazos** de oficios del portal de la **CNBV (Comisión Nacional Bancaria y de Valores)**. Los datos se procesan, se guardan de forma incremental en **Google Sheets** y se envían notificaciones en tiempo real a diferentes salas de **Google Chat** según el área de procedencia, además de un resumen consolidado a **Telegram**.
 
 ---
 
@@ -14,6 +14,7 @@ Este proyecto es un bot automatizado de Web Scraping desarrollado en **Python** 
     *   `Operaciones Ilícitas`
 *   **Base de Datos en Google Sheets**: Guarda los registros de manera inteligente (evitando duplicados utilizando un ID compuesto de `Folio-Fecha de rechazo`).
 *   **Notificaciones Dinámicas (Google Chat)**: Envía tarjetas visuales e interactivas directamente a los webhooks correspondientes de cada equipo en Google Chat.
+*   **Resumen en Telegram**: Envía el total de registros nuevos, los oficios agrupados por área y un botón para abrir la hoja de monitoreo. Los resúmenes largos se dividen en varios mensajes.
 *   **Contenerización con Docker & Tini**: Preparado para producción usando una imagen base optimizada de Playwright y `tini` como init process para evitar procesos zombis.
 
 ---
