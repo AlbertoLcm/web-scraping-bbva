@@ -7,7 +7,7 @@ from playwright.async_api import Page
 
 from app.config import AREAS, URLS
 from app.database import procesar_datos_pendientes
-from app.notifier import enviar_alerta_reporte_pendientes
+from app.notifier import enviar_alerta_pendientes_error
 from app.scraper.cnbv_client import abrir_sesion_cnbv
 
 
@@ -90,9 +90,9 @@ async def ejecutar_monitoreo_pendientes() -> pd.DataFrame:
         df_pendientes = await ejecutar_extraccion_pendientes(page)
 
     if not df_pendientes.empty:
-        nuevos = procesar_datos_pendientes(df_pendientes)
-        # enviar_alerta_reporte_pendientes()
+        _ = procesar_datos_pendientes(df_pendientes)
     else:
         print("[ERROR] No se pudo procesar correctamente. Ejecución detenida")
+        enviar_alerta_pendientes_error()
 
     return df_pendientes

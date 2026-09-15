@@ -5,30 +5,47 @@ import requests
 from app.config import CONFIG, URLS
 
 
-def enviar_alerta_reporte_pendientes() -> bool:
-    """Avisa al chat de datos que el reporte de pendientes se actualizó."""
+def enviar_alerta_pendientes_error() -> bool:
+    """Notifica al chat de datos que el reporte de pendientes falló durante su ejecución."""
+
     webhook = CONFIG.get("CHAT_WEBHOOK_DATA")
+
     if not webhook:
-        print("[WARN] CHAT_WEBHOOK_DATA sin configurar. No se enviará el aviso de pendientes.")
+        print(
+            "[WARN] Chat de datos sin configurar: "
+            "falta CHAT_WEBHOOK_DATA. No se enviará la alerta de error."
+        )
         return False
+
+    mensaje = (
+        "⚠️ Reporte de pendientes | Error de ejecución\n\n"
+        "El proceso de actualización del reporte de pendientes "
+        "finalizó con un error y requiere revisión.\n\n"
+        f"<{URLS['SHEET_BASE']}|Abrir reporte de pendientes>"
+    )
 
     try:
         response = requests.post(
             webhook,
-            json={"text": (
-                "El reporte de pendientes se ha actualizado.\n"
-                f"<{URLS['SHEET_BASE']}|Abrir reporte de pendientes>"
-            )},
+            json={"text": mensaje},
             timeout=15,
         )
-        if response.status_code != 200:
-            print(f"[ERROR CHAT] Fallo al enviar el aviso de pendientes. HTTP: {response.status_code}")
+
+        if not response.ok:
+            print(
+                "[ERROR CHAT] Fallo al enviar la alerta de error de pendientes. "
+                f"HTTP: {response.status_code}"
+            )
             return False
+
     except requests.RequestException:
-        print("[ERROR CHAT] Fallo de conexión al enviar el aviso de pendientes.")
+        print(
+            "[ERROR CHAT] Fallo de conexión al enviar "
+            "la alerta de error de pendientes."
+        )
         return False
 
-    print("[CHAT] Aviso de actualización de pendientes enviado.")
+    print("[CHAT] Alerta de error de pendientes enviada exitosamente.")
     return True
 
 
@@ -46,9 +63,9 @@ def enviar_alerta_telegram(df_nuevos) -> bool:
     cantidades = df_nuevos["Area"].fillna("Sin área").value_counts()
     lineas = ["CNBV | Nuevos rechazos", f"Total guardados: {len(df_nuevos)}", ""]
     lineas.extend(f"• {area}: {cantidad}" for area, cantidad in cantidades.items())
-    lineas.extend(["", f"Hoja de monitoreo: {URLS['SHEET_MONITOREO']}"])
-
+    lineas.extend(["", f"Hoja de monitoreo: {URLS['SHEET_BASE']}"])
     try:
+
         response = requests.post(
             f"https://api.telegram.org/bot{token}/sendMessage",
             json={
