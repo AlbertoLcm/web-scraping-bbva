@@ -5,6 +5,33 @@ import requests
 from app.config import CONFIG, URLS
 
 
+def enviar_alerta_reporte_pendientes() -> bool:
+    """Avisa al chat de datos que el reporte de pendientes se actualizó."""
+    webhook = CONFIG.get("CHAT_WEBHOOK_DATA")
+    if not webhook:
+        print("[WARN] CHAT_WEBHOOK_DATA sin configurar. No se enviará el aviso de pendientes.")
+        return False
+
+    try:
+        response = requests.post(
+            webhook,
+            json={"text": (
+                "El reporte de pendientes se ha actualizado.\n"
+                f"<{URLS['SHEET_BASE']}|Abrir reporte de pendientes>"
+            )},
+            timeout=15,
+        )
+        if response.status_code != 200:
+            print(f"[ERROR CHAT] Fallo al enviar el aviso de pendientes. HTTP: {response.status_code}")
+            return False
+    except requests.RequestException:
+        print("[ERROR CHAT] Fallo de conexión al enviar el aviso de pendientes.")
+        return False
+
+    print("[CHAT] Aviso de actualización de pendientes enviado.")
+    return True
+
+
 def enviar_alerta_telegram(df_nuevos) -> bool:
     """Envía un resumen del lote guardado: total, cantidades por área y enlace."""
     if df_nuevos.empty:

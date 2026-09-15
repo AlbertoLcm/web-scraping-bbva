@@ -26,6 +26,7 @@ CONFIG = {
     "TELEGRAM_CHAT_ID": os.getenv("TELEGRAM_CHAT_ID"),
     "URL_PUBLICADOS": os.getenv("URL_PUBLICADOS"),
     "URL_ENVIO_RESPUESTAS": os.getenv("URL_ENVIO_RESPUESTAS"),
+    "URL_PENDIENTES": os.getenv("URL_PENDIENTES")
 }
 
 URLS = {
@@ -34,6 +35,7 @@ URLS = {
     "PUBLICADOS": CONFIG['URL_PUBLICADOS'],
     "FUERA_SERVICIO": CONFIG['URL_FUERA_SERVICIO'],
     "ENVIO_RESPUESTAS": CONFIG['URL_ENVIO_RESPUESTAS'],
+    "PENDIENTES": CONFIG['URL_PENDIENTES'],
     "SHEET_BASE": f"https://docs.google.com/spreadsheets/d/{CONFIG['SHEET_ID']}",
     "SHEET_MONITOREO": f"https://docs.google.com/spreadsheets/d/{CONFIG['SHEET_ID_MONITOREO']}"
 }
