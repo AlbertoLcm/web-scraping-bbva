@@ -11,27 +11,6 @@ from datetime import date
 from app.config import CONFIG, info_credentials_gcp
 
 
-# El scraper entrega texto y Google Sheets suele inferir números al leerlo.
-# Estas columnas se comparan o actualizan entre ambas fuentes, por lo que deben
-# conservar un tipo común (y Folio debe preservar posibles ceros iniciales).
-COLUMNAS_TEXTO_PENDIENTES = [
-    "Folio",
-    "Año",
-    "Oficio CNBV",
-    "Expediente",
-    "Publicación",
-    "Disponibilidad",
-    "Plazo",
-    "Vencimiento",
-    "Area",
-    "FolioID",
-    "Primera deteccion",
-    "Ultima deteccion",
-    "Fecha salida",
-    "Estado",
-]
-
-
 def estandarizar_fechas(fecha):
     from datetime import datetime
     meses_es = {
@@ -207,112 +186,13 @@ def actualizar_metricas_pendientes(
 def procesar_datos_pendientes(
     df_pendientes: pd.DataFrame,
 ) -> pd.DataFrame | None:
-    """Actualiza el reporte y devuelve nuevos registros, o None si falla."""
+    """Reemplaza el reporte de pendientes con la última consulta."""
 
     try:
         spreadsheet = get_gspread_client().open_by_key(CONFIG["SHEET_ID"])
         worksheet = spreadsheet.worksheet("Pendientes")
 
-        df_historico = pd.DataFrame(worksheet.get_all_records())
-
-        df_actual = df_pendientes.copy()
-
-        # get_all_records() infiere columnas numéricas como int64, mientras que
-        # Playwright entrega texto. Normalizar evita asignar StringArray sobre
-        # una columna int64 al actualizar el histórico.
-        for columna in COLUMNAS_TEXTO_PENDIENTES:
-            if columna in df_actual.columns:
-                df_actual[columna] = df_actual[columna].astype("string")
-            if columna in df_historico.columns:
-                df_historico[columna] = df_historico[columna].astype("string")
-
-        hoy = pd.Timestamp.now(tz="America/Mexico_City").date().isoformat()
-
-        df_actual["FolioID"] = (
-            df_actual["Folio"].astype(str).str.strip() + "-" + df_actual["Publicación"]
-        )
-
-        if df_historico.empty:
-            df_actual["Primera deteccion"] = hoy
-            df_actual["Ultima deteccion"] = hoy
-            df_actual["Fecha salida"] = ""
-            df_actual["Estado"] = "Pendiente"
-
-            df_historico = df_actual.copy()
-            df_nuevos = df_actual.copy()
-
-        else:
-            df_historico["FolioID"] = df_historico["FolioID"].astype(str).str.strip()
-
-            ids_actuales = set(df_actual["FolioID"])
-            ids_historicos = set(df_historico["FolioID"])
-
-            pendientes_anteriores = (df_historico["Estado"] == "Pendiente").sum()
-
-            if (
-                pendientes_anteriores > 0
-                and len(df_actual) < pendientes_anteriores * 0.5
-            ):
-                raise ValueError(
-                    "El número de registros obtenidos es "
-                    "anormalmente bajo. Se cancela la actualización "
-                    "para evitar cierres masivos incorrectos."
-                )
-
-            df_nuevos = df_actual[~df_actual["FolioID"].isin(ids_historicos)].copy()
-
-            if not df_nuevos.empty:
-                df_nuevos["Primera deteccion"] = hoy
-                df_nuevos["Ultima deteccion"] = hoy
-                df_nuevos["Fecha salida"] = ""
-                df_nuevos["Estado"] = "Pendiente"
-
-                df_historico = pd.concat([df_historico, df_nuevos], ignore_index=True)
-
-            mask_siguen_pendientes = df_historico["FolioID"].isin(ids_actuales)
-            df_historico.loc[mask_siguen_pendientes, "Ultima deteccion"] = hoy
-            df_historico.loc[mask_siguen_pendientes, "Fecha salida"] = ""
-            df_historico.loc[mask_siguen_pendientes, "Estado"] = "Pendiente"
-
-            mask_resueltos = ~df_historico["FolioID"].isin(ids_actuales) & (
-                df_historico["Estado"] == "Pendiente"
-            )
-            df_historico.loc[mask_resueltos, "Fecha salida"] = hoy
-            df_historico.loc[mask_resueltos, "Estado"] = "Atendido"
-            df_historico = df_historico[df_historico["Estado"] != "Atendido"]
-
-            columnas_actualizables = [
-                "Folio",
-                "Año",
-                "Oficio CNBV",
-                "Expediente",
-                "Publicación",
-                "Disponibilidad",
-                "Plazo",
-                "Vencimiento",
-                "Area",
-            ]
-
-            df_actual_indexado = df_actual.set_index("FolioID")
-
-            for columna in columnas_actualizables:
-
-                mask = df_historico["FolioID"].isin(df_actual_indexado.index)
-
-                df_historico.loc[mask, columna] = (
-                    df_historico.loc[mask, "FolioID"]
-                    .map(df_actual_indexado[columna])
-                    .values
-                )
-
-
-        if not df_nuevos.empty:
-            print(f"[DATOS] 💡 Se detectaron {len(df_nuevos)} pendientes nuevos.")
-
-        print(f"[DATOS] Pendientes actuales: {len(df_actual)}")
-        print(f"[DATOS] Histórico acumulado: {len(df_historico)}")
-
-        columns = [
+        columnas = [
             "Folio",
             "Año",
             "Oficio CNBV",
@@ -322,23 +202,30 @@ def procesar_datos_pendientes(
             "Plazo",
             "Vencimiento",
             "Area",
-            "FolioID",
-            "Primera deteccion",
-            "Ultima deteccion",
-            "Fecha salida",
-            "Estado",
         ]
+        faltantes = set(columnas).difference(df_pendientes.columns)
+        if faltantes:
+            raise ValueError(
+                "La consulta de pendientes no incluye las columnas requeridas: "
+                f"{', '.join(sorted(faltantes))}"
+            )
 
-        df_historico = df_historico[columns]
+        df_actual = df_pendientes[columnas].copy()
 
         # Filtramos fechas desde el 2026 (por error en el portal SITI)
-        df_historico["Vencimiento"] = df_historico["Vencimiento"].apply(estandarizar_fechas)
-        df_historico["Vencimiento"] = pd.to_datetime(df_historico["Vencimiento"])
-        df_historico = df_historico[df_historico["Vencimiento"] >= pd.to_datetime("2026-01-01")]
+        df_actual["Vencimiento"] = df_actual["Vencimiento"].apply(estandarizar_fechas)
+        df_actual["Vencimiento"] = pd.to_datetime(
+            df_actual["Vencimiento"], errors="coerce"
+        )
+        df_actual = df_actual[
+            df_actual["Vencimiento"] >= pd.to_datetime("2026-01-01")
+        ]
+
+        print(f"[DATOS] Pendientes actuales: {len(df_actual)}")
 
         set_with_dataframe(
             worksheet,
-            df_historico,
+            df_actual,
             include_index=False,
             resize=True,
         )
@@ -348,7 +235,7 @@ def procesar_datos_pendientes(
             df_actual,
         )
 
-        return df_nuevos
+        return df_actual
 
     except Exception as e:
 

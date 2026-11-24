@@ -41,7 +41,7 @@ async def load_page_siti(context: BrowserContext, user: str, password: str) -> O
 
 
 @asynccontextmanager
-async def abrir_sesion_cnbv(*, headless: bool = True) -> AsyncIterator[Optional[Page]]:
+async def abrir_sesion_cnbv(*, headless: bool = False) -> AsyncIterator[Optional[Page]]:
     """Abre una sesión y cierra el navegador incluso si falla una tarea."""
     async with async_playwright() as playwright:
         browser = await playwright.chromium.launch(headless=headless)
