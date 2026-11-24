@@ -11,88 +11,118 @@ from app.notifier import enviar_alerta_pendientes_error
 from app.scraper.cnbv_client import abrir_sesion_cnbv
 
 
+async def _consultar_tabla(
+    page: Page,
+    area: str,
+    columnas: list[str],
+    tipo_respuesta: str | None = None,
+) -> pd.DataFrame:
+    """Ejecuta una consulta y devuelve sus filas, o propaga su error."""
+    print(f"--- Consultando: {area}")
+    await page.select_option("#ctl00_DefaultPlaceholder_ComboBoxAreas", label=area)
+    if tipo_respuesta is not None:
+        await page.select_option(
+            "#ctl00_DefaultPlaceholder_ComboBoxTipoRespuesta",
+            label=tipo_respuesta,
+        )
+
+    async with page.expect_response(
+        lambda response: response.status == 200,
+        timeout=180_000,
+    ):
+        await page.get_by_role("button", name="Consultar").click(timeout=180_000)
+
+    # La tabla debe existir; que no haya filas es una consulta válida.
+    await page.wait_for_selector(
+        "#ctl00_DefaultPlaceholder_GridResult",
+        state="attached",
+        timeout=180_000,
+    )
+    await asyncio.sleep(0.5)
+    datos_tabla = await page.evaluate(
+        """() => Array.from(
+            document.querySelectorAll("#ctl00_DefaultPlaceholder_GridResult tbody tr")
+        ).slice(1).map(tr => Array.from(tr.querySelectorAll("td"))
+            .map(td => td.innerText.trim()))""",
+    )
+
+    # También valida que el portal conserve el número esperado de columnas.
+    df = pd.DataFrame(datos_tabla, columns=columnas)
+    mensaje = "sin registros" if df.empty else f"{len(df)} registros extraídos"
+    print(f"   [OK] {area}: {mensaje}.")
+    return df
+
+
 async def ejecutar_extraccion_pendientes(page: Page) -> pd.DataFrame:
-    """
-    Extrae todos los oficios pendientes de todas las áreas
-    Consultado el apartado Envio de respuestas en linea.
-    """
-    pendientes_list = []
+    """Extrae pendientes y escritos de respuesta; falla de forma atómica."""
+    columnas_pendientes = [
+        "Situacion", "Desc", "Folio", "Año", "Oficio CNBV", "Expediente",
+        "Publicación", "Disponibilidad", "Plazo", "Vencimiento",
+    ]
+    columnas_respuestas = [
+        "Check", "Folio", "Año", "Oficio CNBV", "Expediente", "ComentarioRechazo",
+    ]
+    pendientes_list: list[pd.DataFrame] = []
+    respuestas_list: list[pd.DataFrame] = []
 
-    try:
-        await page.goto(URLS["PENDIENTES"], wait_until="domcontentloaded", timeout=5_000)
+    await page.goto(URLS["PENDIENTES"], wait_until="domcontentloaded", timeout=5_000)
+    for area in AREAS:
+        try:
+            df = await _consultar_tabla(page, area, columnas_pendientes)
+        except Exception as exc:
+            raise RuntimeError(f"Falló la consulta de pendientes para {area}") from exc
+        if not df.empty:
+            df["Area"] = area
+            pendientes_list.append(df.drop(columns=["Situacion", "Desc"]))
 
-        for area in AREAS:
-            print(f"--- Consultado: {area}")
-            await page.select_option("#ctl00_DefaultPlaceholder_ComboBoxAreas", label=area)
+    await page.goto(URLS["ENVIO_RESPUESTAS"], wait_until="domcontentloaded", timeout=5_000)
+    for area in AREAS:
+        try:
+            df = await _consultar_tabla(
+                page,
+                area,
+                columnas_respuestas,
+                tipo_respuesta="Escrito de Respuesta",
+            )
+        except Exception as exc:
+            raise RuntimeError(f"Falló la consulta de escritos de respuesta para {area}") from exc
+        if not df.empty:
+            df["Area"] = area
+            respuestas_list.append(df.drop(columns=["Check", "ComentarioRechazo"]))
 
-            try:
-                # Creamos una promesa que espera a que haya una respuesta de red tras el click.
-                # Esto es vital en ASP.NET para asegurar que el servidor respondió antes de leer la tabla.
-                async with page.expect_response(lambda response: response.status == 200, timeout=180_000):
-                    await page.get_by_role("button", name='Consultar').click(timeout=180_000)
-
-                await asyncio.sleep(0.5)
-
-                try:
-                    await page.wait_for_function(
-                            """() => {
-                                const rows = document.querySelectorAll("#ctl00_DefaultPlaceholder_GridResult tr");
-                                return rows.length >= 2;
-                            }""",
-                            timeout=1_000
-                        )
-
-                except Exception:
-                    print(f"   [WARN] Tabla {area} sin datos.")
-                    continue
-
-                columnas = ["Situacion", "Desc", "Folio", "Año", "Oficio CNBV", "Expediente", "Publicación", "Disponibilidad", "Plazo", "Vencimiento"]
-
-                datos_tabla = await page.evaluate(
-                    """() => {
-                        const rows = Array.from(document.querySelectorAll("#ctl00_DefaultPlaceholder_GridResult tbody tr")).slice(1);
-                        return rows.map(tr => {
-                            const celdas = Array.from(tr.querySelectorAll('td')).map(td => td.innerText.trim());
-                            return celdas;
-                        });
-                    }""",
-                )
-
-                if datos_tabla:
-                    dfs = pd.DataFrame(datos_tabla, columns=columnas)
-
-                    dfs['Area'] = area
-                    cols_to_drop = [c for c in ["Situacion", "Desc"] if c in dfs.columns]
-                    dfs = dfs.drop(columns=cols_to_drop)
-
-                    pendientes_list.append(dfs)
-                    print(f"   [OK] {len(dfs)} registros extraídos.")
-
-            except Exception as e_area:
-                print(f"   [ERROR AREA] Fallo procesando {area}: {e_area}")
-                return pd.DataFrame()
-
-    except Exception as e:
-        print(f"[ERROR CRÍTICO] Fallo en navegación: {e}")
-        return pd.DataFrame()
-
-    if pendientes_list:
-        return pd.concat(pendientes_list, ignore_index=True)
-
-    return pd.DataFrame()
+    pendientes_df = (
+        pd.concat(pendientes_list, ignore_index=True)
+        if pendientes_list
+        else pd.DataFrame(columns=["Folio", "Año", "Oficio CNBV", "Expediente", "Publicación", "Disponibilidad", "Plazo", "Vencimiento", "Area"])
+    )
+    respuestas_df = (
+        pd.concat(respuestas_list, ignore_index=True)
+        if respuestas_list
+        else pd.DataFrame(columns=["Folio", "Año", "Oficio CNBV", "Expediente", "Area"])
+    )
+    return pendientes_df[pendientes_df["Oficio CNBV"].isin(respuestas_df["Oficio CNBV"])]
 
 
 async def ejecutar_monitoreo_pendientes() -> pd.DataFrame:
     """Extrae pendientes, actualiza el reporte y avisa por Google Chat."""
-    async with abrir_sesion_cnbv() as page:
-        if page is None:
-            return pd.DataFrame()
-        df_pendientes = await ejecutar_extraccion_pendientes(page)
+    try:
+        async with abrir_sesion_cnbv() as page:
+            if page is None:
+                raise RuntimeError("No fue posible abrir sesión en CNBV")
+            df_pendientes = await ejecutar_extraccion_pendientes(page)
+    except Exception:
+        # La alerta no puede ocultar el error original de la consulta.
+        try:
+            enviar_alerta_pendientes_error()
+        except Exception as alerta_error:
+            print(f"[ERROR ALERTA] No se pudo enviar la alerta: {alerta_error}")
+        raise
 
     if not df_pendientes.empty:
-        _ = procesar_datos_pendientes(df_pendientes)
+        resultado = procesar_datos_pendientes(df_pendientes)
+        if resultado is None:
+            raise RuntimeError("Falló la actualización del reporte de pendientes")
     else:
-        print("[ERROR] No se pudo procesar correctamente. Ejecución detenida")
-        enviar_alerta_pendientes_error()
+        print("[INFO] Consulta completada sin pendientes con escrito de respuesta.")
 
     return df_pendientes

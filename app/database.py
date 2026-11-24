@@ -10,6 +10,28 @@ from datetime import date
 
 from app.config import CONFIG, info_credentials_gcp
 
+
+# El scraper entrega texto y Google Sheets suele inferir números al leerlo.
+# Estas columnas se comparan o actualizan entre ambas fuentes, por lo que deben
+# conservar un tipo común (y Folio debe preservar posibles ceros iniciales).
+COLUMNAS_TEXTO_PENDIENTES = [
+    "Folio",
+    "Año",
+    "Oficio CNBV",
+    "Expediente",
+    "Publicación",
+    "Disponibilidad",
+    "Plazo",
+    "Vencimiento",
+    "Area",
+    "FolioID",
+    "Primera deteccion",
+    "Ultima deteccion",
+    "Fecha salida",
+    "Estado",
+]
+
+
 def estandarizar_fechas(fecha):
     from datetime import datetime
     meses_es = {
@@ -195,6 +217,15 @@ def procesar_datos_pendientes(
 
         df_actual = df_pendientes.copy()
 
+        # get_all_records() infiere columnas numéricas como int64, mientras que
+        # Playwright entrega texto. Normalizar evita asignar StringArray sobre
+        # una columna int64 al actualizar el histórico.
+        for columna in COLUMNAS_TEXTO_PENDIENTES:
+            if columna in df_actual.columns:
+                df_actual[columna] = df_actual[columna].astype("string")
+            if columna in df_historico.columns:
+                df_historico[columna] = df_historico[columna].astype("string")
+
         hoy = pd.Timestamp.now(tz="America/Mexico_City").date().isoformat()
 
         df_actual["FolioID"] = (
@@ -248,6 +279,7 @@ def procesar_datos_pendientes(
             )
             df_historico.loc[mask_resueltos, "Fecha salida"] = hoy
             df_historico.loc[mask_resueltos, "Estado"] = "Atendido"
+            df_historico = df_historico[df_historico["Estado"] != "Atendido"]
 
             columnas_actualizables = [
                 "Folio",
